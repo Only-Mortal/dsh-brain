@@ -1,0 +1,11 @@
+# 可重建的运行数据
+data/
+# 真实记忆库不进仓库（README 13.2 / 15.1）
+memory/*.sqlite3
+memory/*.sqlite3-wal
+memory/*.sqlite3-shm
+memory/*.db
+# Python
+__pycache__/
+*.pyc
+.venv/
