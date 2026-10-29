@@ -71,7 +71,18 @@ CREATE TABLE IF NOT EXISTS memories (
     contradicts_ids TEXT NOT NULL DEFAULT '[]',
     lifecycle_state TEXT NOT NULL DEFAULT 'active'
         CHECK (lifecycle_state IN ('candidate','active','superseded','archived','pending_delete','deleted')),
-    privacy_scope   TEXT NOT NULL CHECK (privacy_scope IN ('private','conversation','instance','public'))
+    privacy_scope   TEXT NOT NULL CHECK (privacy_scope IN ('private','conversation','instance','public')),
+    -- M2（巩固皮层）字段必须写进建表语句，否则重建表时会被当成"新列"丢掉数据
+    cluster_id      TEXT,
+    structured_claim TEXT NOT NULL DEFAULT '{}',
+    support_count   INTEGER NOT NULL DEFAULT 0,
+    independent_source_count INTEGER NOT NULL DEFAULT 0,
+    subject_distribution TEXT NOT NULL DEFAULT '{}',
+    time_distribution    TEXT NOT NULL DEFAULT '{}',
+    contradicting_event_ids TEXT NOT NULL DEFAULT '[]',
+    algorithm_version TEXT,
+    input_watermark REAL,
+    change_kind     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mem_lookup ON memories(instance_id, lifecycle_state, memory_type);
 CREATE INDEX IF NOT EXISTS idx_mem_conv ON memories(instance_id, conversation_id);
@@ -189,14 +200,40 @@ MEMORY_EXTRA_COLUMNS = {
 }
 
 
+def _schema_ready(conn: sqlite3.Connection) -> bool:
+    """库已经是当前版本就不再跑建表脚本（并发 connect 会抢写锁）。"""
+    try:
+        row = conn.execute("SELECT v FROM meta WHERE k = 'schema_version'").fetchone()
+    except sqlite3.OperationalError:
+        return False
+    if row is None:
+        return False
+    try:
+        return int(row["v"]) >= SCHEMA_VERSION
+    except (TypeError, ValueError):
+        return False
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(p), isolation_level=None, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
-    conn.executescript(SCHEMA)
-    _migrate(conn)
+    if not _schema_ready(conn):
+        last: Exception | None = None
+        for attempt in range(5):
+            try:
+                conn.executescript(SCHEMA)
+                _migrate(conn)
+                break
+            except sqlite3.OperationalError as exc:   # 并发建库/迁移：退避重试
+                last = exc
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+        else:
+            raise last  # type: ignore[misc]
     return conn
 
 

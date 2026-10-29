@@ -120,8 +120,9 @@ def _handle(conn, env: EventEnvelope, reasoner: Reasoner) -> dict[str, Any]:
     ctx = access_context(env)
     text = str(env.payload.get("text", ""))
     try:
+        deltas = _affect_deltas(text)
         aff = state_mod.affect_of(conn, env.instance_id)
-        aff.inject(_affect_deltas(text))
+        aff.inject(deltas)
         affect_values = aff.value()
         score = attention_score(env, affect_values)
         history = memory_mod.retrieve(conn, ctx, limit=5)
@@ -156,7 +157,11 @@ def _handle(conn, env: EventEnvelope, reasoner: Reasoner) -> dict[str, Any]:
                 )
                 memory_ids.append(memory_mod.insert(conn, cand))
 
-        state_mod.save_affect(conn, env.instance_id, aff, env.event_id)
+        # 并发保护：推理用的是快照，落库时用事务内的最新值再加一次增量，
+        # 不能把整份快照写回去（否则并发事件会互相覆盖，NEXT-STEPS 2.1 V3）。
+        fresh = state_mod.affect_of(conn, env.instance_id)
+        fresh.inject(deltas)
+        state_mod.save_affect(conn, env.instance_id, fresh, env.event_id)
 
         cog = state_mod.get(conn, env.instance_id, "cognitive")["data"] or {}
         cog["last_event"] = env.event_id
