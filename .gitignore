@@ -9,3 +9,4 @@ memory/*.db
 __pycache__/
 *.pyc
 .venv/
+tools/.ingest-state.json
