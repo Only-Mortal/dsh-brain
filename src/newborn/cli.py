@@ -98,6 +98,33 @@ def cmd_claim(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    from . import backup
+    manifest = backup.create_backup(_db_path(args.db), args.dest,
+                                    instance_scope=args.instance)
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_verify_backup(args) -> int:
+    from . import backup
+    problems = backup.verify_backup(args.frm)
+    print(json.dumps({"ok": not problems, "problems": problems}, ensure_ascii=False, indent=2))
+    return 0 if not problems else 1
+
+
+def cmd_restore(args) -> int:
+    from . import backup
+    try:
+        res = backup.restore_backup(args.frm, args.to or _db_path(args.db),
+                                    confirm=args.confirm)
+    except backup.BackupError as exc:
+        print(json.dumps({"status": "rejected", "reason": str(exc)}, ensure_ascii=False))
+        return 1
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_consolidate(args) -> int:
     from . import consolidate as cg
     from .inference import get_backend
@@ -151,6 +178,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--lease", type=float, default=60.0)
     s.set_defaults(func=cmd_claim)
+
+    s = sub.add_parser("backup", help="做一份一致性备份")
+    s.add_argument("--dest", required=True, help="备份目录（必须为空或不存在）")
+    s.add_argument("--instance", default=None)
+    s.set_defaults(func=cmd_backup)
+
+    s = sub.add_parser("verify-backup", help="校验备份是否可用")
+    s.add_argument("--from", dest="frm", required=True)
+    s.set_defaults(func=cmd_verify_backup)
+
+    s = sub.add_parser("restore", help="从备份恢复（破坏性，需 --confirm）")
+    s.add_argument("--from", dest="frm", required=True)
+    s.add_argument("--to", default=None, help="恢复目标（默认当前 --db）")
+    s.add_argument("--confirm", action="store_true")
+    s.set_defaults(func=cmd_restore)
 
     s = sub.add_parser("consolidate", help="巩固：把情景压成语义（皮层）")
     s.add_argument("--hours", type=float, default=24.0, help="回看时间窗（小时）")

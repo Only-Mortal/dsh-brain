@@ -44,3 +44,14 @@ python -m unittest discover -s tests            # 全量
 - 崩溃点注入：进程在「领取后、提交前」被杀，恢复后是否只产生一个结果。
 - 状态层 cognitive/affective 之外的一致性（trait 由巩固任务写，尚未与并发事件交叉）。
 - Web 页面本身（HTML/JS）未在浏览器里跑，只验了 API 路径。
+
+## 阶段 A 追加：备份与恢复（ackup.py）
+
+- 快照用 SQLite 官方 ackup() API，并发写入时也能过完整性检查（有测试）。
+- 清单字段：备份 ID、UTC 时间、代码修订、schema 版本、算法版本、实例范围、文件 SHA-256、输入水位、格式版本；不含令牌。
+- 校验：清单存在 → 哈希匹配 → integrity_check → schema 版本不高于当前代码。
+- 恢复：必须 --confirm；先校验，再拷到 <target>.restore-tmp 做完整性检查，通过后才换名，旧库保留为 <target>.pre-restore-<UTC>。
+- 备份**不改源库**：旧库若还是 schema 0，清单就记 0，恢复时 
+eeds_upgrade=true，由首次 db.connect() 完成升级。
+- 命令：ackup --dest DIR、erify-backup --from DIR、estore --from DIR [--to PATH] --confirm。
+- 测试：	ests/test_backup.py 10 条（一致性、篡改拒绝、缺清单拒绝、目标非空拒绝、confirm 必填、旧库保留、数据完整）。
