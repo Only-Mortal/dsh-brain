@@ -113,7 +113,8 @@ function collect(lines, state) {
     } catch {
       continue;
     }
-    if (rec.type !== "user/message" && rec.type !== "assistant/message") continue;
+    // 2026-10-30：暂时只收用户消息，回复不进库（他的决定）
+    if (rec.type !== "user/message") continue;
     const data = rec.data || {};
     const role = data.role || (rec.type === "user/message" ? "user" : "assistant");
     let body = textOf(data);
