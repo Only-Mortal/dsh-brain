@@ -2,7 +2,8 @@
 
 > 对象：审计意见 14 条（含 3 条"严重"、5 条"高"、4 条"中"）。
 > 结论：**14 条全部处理，其中 11 条已修并有测试，3 条做了约束性降级与文档化**。
-> 验证：`python -m unittest discover -s tests` → **45 条全过**；`python tests/stress_m1.py` → 8 项不变量全绿。
+> 验证：python -m unittest discover -s tests → **56 条全过**；python tests/stress_m1.py → 8 项不变量全绿。
+> **状态截至 commit f0730cf 之后的一次补修（2026-10-29 深夜）**；本文件会随代码变，之后以 git log 与测试数为准，别只看这里的数字。
 
 ## 一、逐条处置
 
@@ -19,15 +20,14 @@
 | 9 | 高 | 同一事件可能被并发处理两次 | 新增 `claim_events()`：`claimed_by + lease_until` 条件更新领取，处理完释放 | `test_event_claimed_once`（w1 领到、w2 领不到、过期可接管） |
 | 10 | 中 | 统计产物缺字段 | `structured_claim` 带完整 `subject_distribution`/`time_distribution`/`source_event_count`；语义记忆写入 `source_event_ids` 与两个分布 | `test_semantic_inherits_private_scope` 间接覆盖 + 代码 |
 | 11 | 中 | Trait 规则描述的是数据集不是人格 | 保留为"数据覆盖度代理"，在 README 记为 KN-04；`apply_trait_proposal` 增加维度白名单、有限数值校验、事务化、证据指纹 | 单测覆盖越界/非法维度路径 |
-| 12 | 中 | 矛盾识别太脆弱 | 先算**去否定词**的 `topic_shingles` 再比极性，阈值 0.45 | 代码 + `CONFLICT_TOPIC_THRESHOLD`；建议明天补真实中文否定样例测试 |
-| 13 | 中 | 迁移不完整 | `schema_version` 写入 meta（v2）；memories/events/consolidation_jobs/trait_proposals 缺列自动 ALTER；唯一索引 `IF NOT EXISTS` 补齐 | 迁移函数 + 旧库可用性 |
-| 14 | 中 | 文档自相矛盾 | README 顶部阶段、技术选型、尚未实现三处统一；`__init__` 测试数改为 45 | 已改 |
+| 12 | 中 | 矛盾识别太脆弱 | 主题指纹先去否定词；极性按**否定次数奇偶**判定（双重否定回正）；同簇内正反并存也判 disputed 并记反证 | `tests/test_negation.py` 七条：单词否定、双重否定、主题一致、簇内冲突成 disputed、同极性不误判、**已知不覆盖样例（引述/反问/反讽）** |
+| 13 | 中 | 迁移不完整 | 改为**按版本重建**：`schema_version < 当前` 时把 events/memories/outbox/consolidation_jobs/trait_proposals 建新表→拷公共列→换名，CHECK 与唯一约束一并升级；再补索引与版本号 | `tests/test_migration.py` 四条：缺列补齐、老行不丢、版本幂等、复合唯一键生效 |
+| 14 | 中 | 文档自相矛盾 | README 顶部阶段、技术选型、尚未实现三处统一；`__init__` 测试数改为当前值 | 已改（本次再同步为 56） |
 
-## 二、明确没做满的三件事
+## 二、仍然没做满的（已缩小到两件）
 
-1. **#13 迁移只补列，不重建表**。SQLite 不支持直接修改 CHECK 约束；老库里 events 的 `process_state` CHECK、outbox 的状态约束仍是旧版。要彻底一致需要"建新表-搬数据-换名"，明早单独做。
-2. **#11 Trait 仍是代理指标**。现在只按"来源数/天数"给小提案，不代表性格。真正的 Trait 需要长期行为结果与反馈，已写进 README KN-04，等 M3。
-3. **#12 矛盾识别只到"主题相近 + 极性相反"**。同义改写、双重否定、反讽都识别不了，需要真实样例集再调。
+1. **#11 Trait 仍是代理指标**。现在只按"来源数/天数"给小提案，不代表性格。真正的 Trait 需要长期行为结果与反馈，已写进 README KN-04，等 M3。
+2. **#12 否定规则仍是粗规则**。已按奇偶判极性（双重否定回正），但**引述他人否定、反问、反讽**仍会误判——这些样例已写进测试，明确标为"已知不覆盖"，不当成完备。
 
 ## 三、顺手修掉的其它隐患
 
@@ -40,7 +40,7 @@
 ## 四、验证记录（可复跑）
 
 ```
-python -m unittest discover -s tests        # 45 passed
+python -m unittest discover -s tests        # 56 passed
 python tests/stress_m1.py                   # 240 事件 / 60 故意失败 / 全部恢复 / 90 次领取零重复 / 8 项不变量 true / 测试库自动清除
 ```
 

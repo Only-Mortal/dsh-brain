@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -209,8 +210,57 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
 }
 
 
+def _ddl_for(table: str) -> str:
+    """从 SCHEMA 里抠出某张表的最新建表语句（用于重建旧表）。"""
+    m = re.search(
+        rf"CREATE TABLE IF NOT EXISTS {table} \((.*?)\n\);", SCHEMA, re.S)
+    if not m:
+        raise KeyError(f"SCHEMA 里找不到表 {table}")
+    return f"CREATE TABLE __NAME__ ({m.group(1)}\n)"
+
+
+def _rebuild_table(conn: sqlite3.Connection, table: str) -> None:
+    """建新表 → 拷公共列 → 换名。SQLite 改不了 CHECK，只能这样升约束。"""
+    tmp = f"{table}__migrate"
+    old_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if not old_cols:
+        return
+    conn.execute(f"DROP TABLE IF EXISTS {tmp}")
+    conn.execute(_ddl_for(table).replace("__NAME__", tmp))
+    new_cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({tmp})")}
+    common = sorted(old_cols & new_cols)
+    if common:
+        cols = ", ".join(common)
+        conn.execute(f"INSERT INTO {tmp} ({cols}) SELECT {cols} FROM {table}")
+    conn.execute(f"DROP TABLE {table}")
+    conn.execute(f"ALTER TABLE {tmp} RENAME TO {table}")
+
+
+def _needs_rebuild(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT v FROM meta WHERE k = 'schema_version'").fetchone()
+    if row is None:
+        # 没有版本号：只有空库（刚建）才算新库，老库走重建
+        has_data = any(
+            conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            for t in ("events", "memories", "outbox")
+            if conn.execute(
+                f"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{t}'"
+            ).fetchone()[0]
+        )
+        return bool(has_data)
+    try:
+        return int(row["v"]) < SCHEMA_VERSION
+    except (TypeError, ValueError):
+        return True
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
-    """把老库缺的列补齐（不改已有数据），并记录 schema 版本。"""
+    """老库升级：先按需重建表（补约束与列），再补索引与版本号。"""
+    if _needs_rebuild(conn):
+        with Tx(conn):
+            for table in ("events", "memories", "outbox",
+                          "consolidation_jobs", "trait_proposals"):
+                _rebuild_table(conn, table)
     for table, cols in _COLUMN_MIGRATIONS.items():
         have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
         for col, decl in cols.items():

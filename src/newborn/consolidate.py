@@ -85,8 +85,20 @@ def jaccard(a: Iterable[int], b: Iterable[int]) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+def neg_count(text: str) -> int:
+    """数否定词出现次数（同一句几个算几个）。"""
+    t = (text or "").lower()
+    return sum(t.count(n) for n in NEGATIONS)
+
+
 def polarity(text: str) -> int:
-    return -1 if any(n in (text or "").lower() for n in NEGATIONS) else 1
+    """极性 = 否定次数的奇偶：偶数次（含 0）为正向，奇数为负向。
+
+    这样「我不喜欢开会」是负向，「我没有不喜欢开会」是正向，
+    「我不讨厌开会」也归正向（否定 + 负面词 = 双重否定）。
+    这是粗规则，反讽、反问、引述他人否定都识别不了，见 #12 待办。
+    """
+    return -1 if neg_count(text) % 2 == 1 else 1
 
 
 def day_of(ts: float) -> str:
@@ -607,9 +619,23 @@ def consolidate(conn, instance_id: str = "default", *, window_hours: float = 24.
                 kind = "weakened"
             else:
                 kind = "strengthened"
+            # 同一簇里既有正说又有反说 → 直接判 disputed，并记下反证来源
+            disputed_ids: list[str] = []
+            if len([p for p, c in cluster.polarity.items() if c > 0]) > 1:
+                majority = max(cluster.polarity, key=cluster.polarity.get)
+                for m in cluster.members:
+                    if polarity(m["content"]) != majority:
+                        disputed_ids.extend(str(x) for x in (loads(m["source_event_ids"]) or []))
             prev = _previous_semantic(conn, cluster_id)
+            if disputed_ids:
+                claim["polarity"] = "mixed"
             mem_id = _insert_semantic(conn, instance_id, cluster, claim, item["canonical"],
                                       item["display"], kind, sample.watermark, prev)
+            if disputed_ids:
+                conn.execute(
+                    "UPDATE memories SET epistemic_status = 'disputed',"
+                    " contradicting_event_ids = ? WHERE memory_id = ?",
+                    (dumps(sorted(set(disputed_ids))), mem_id))
             cluster_stats.append({**cluster.stats(),
                                   "time_distribution": cluster.time_distribution})
             produced.append({
