@@ -210,6 +210,7 @@ class Cluster:
     time_distribution: dict[str, int] = field(default_factory=dict)
     polarity: Counter = field(default_factory=Counter)
     privacy_scope: str = "public"
+    domain: tuple = ("instance",)
     conversation_id: str | None = None
     subject_ids: list[str] = field(default_factory=list)
     topic_features: set[int] = field(default_factory=set)
@@ -229,23 +230,33 @@ def _tighten(a: str, b: str) -> str:
     return a if PRIVACY_RANK[a] <= PRIVACY_RANK[b] else b
 
 
-def _compatible(a: dict, members: list[dict]) -> bool:
-    """私有/会话级经历只在同类范围内聚类，绝不跨主体或跨会话合并。"""
-    scope = a.get("privacy_scope") or "instance"
+def domain_key(cluster_or_domain) -> str:
+    """把访问域序列化成稳定的 JSON 串（集合转列表）。"""
+    dom = getattr(cluster_or_domain, "domain", cluster_or_domain)
+    return dumps([sorted(x) if isinstance(x, frozenset) else x for x in dom])
+
+
+def access_domain(row: dict) -> tuple:
+    """一条记忆的访问域，聚类与派生都必须按它分区。
+
+    设计原则（审计 finding 1）：派生对象的读者集合不得大于任何来源的读者集合，
+    所以只有**完全相同的域**才允许聚在一起；宽范围行不能挤进受限域，
+    受限行也不能挤进宽范围域（对称）。
+    """
+    scope = row.get("privacy_scope") or "instance"
     if scope == "private":
-        mine = set(loads(a["subject_ids"]) or [])
-        for m in members:
-            if (m.get("privacy_scope") or "instance") != "private":
-                return False
-            if set(loads(m["subject_ids"]) or []) != mine:
-                return False
-    elif scope == "conversation":
-        for m in members:
-            if (m.get("privacy_scope") or "instance") != "conversation":
-                return False
-            if (m.get("conversation_id") or None) != (a.get("conversation_id") or None):
-                return False
-    return True
+        return ("private", frozenset(loads(row["subject_ids"]) or []))
+    if scope == "conversation":
+        return ("conversation", row.get("conversation_id") or "")
+    if scope == "public":
+        return ("public",)
+    return ("instance",)
+
+
+def _compatible(a: dict, members: list[dict]) -> bool:
+    """对称兼容：域必须与簇内所有成员一致。"""
+    dom = access_domain(a)
+    return all(access_domain(m) == dom for m in members)
 
 
 def build_clusters(rows: list[dict], threshold: float = CLUSTER_THRESHOLD) -> list[Cluster]:
@@ -284,6 +295,7 @@ def build_clusters(rows: list[dict], threshold: float = CLUSTER_THRESHOLD) -> li
         c.time_distribution = dict(days)
         c.independent_sources = len(subjects)
         c.privacy_scope = min(scopes, key=lambda s: PRIVACY_RANK.get(s, 9))
+        c.domain = access_domain(c.members[0])
         c.conversation_id = next(iter(convs)) if len(convs) == 1 else None
         c.subject_ids = sorted(subjects) if c.privacy_scope == "private" else []
     return clusters
@@ -325,7 +337,9 @@ def structured_claim(cluster: Cluster) -> dict[str, Any]:
         "top_subject": top_subject,
         "first_day": days[0] if days else None,
         "last_day": days[-1] if days else None,
-        "sample": cluster.members[0]["content"][:60],
+        "sample": (cluster.members[0]["content"][:60]
+                   if cluster.privacy_scope in ("instance", "public")
+                   else f"（{cluster.privacy_scope} 范围内的表达，已隐藏样本）"),
         "polarity": "negative" if cluster.polarity.get(-1, 0) > cluster.polarity.get(1, 0)
                     else "positive",
         "source_event_count": len(source_event_ids_of(cluster)),
@@ -362,16 +376,19 @@ def model_text(claim: dict[str, Any], backend: Inference | None) -> tuple[str, s
 def _find_cluster(conn, instance_id: str, cluster: Cluster):
     snap = snapshot_fingerprint(cluster.members)
     memfp = member_fingerprint(cluster.members)
+    dom = domain_key(cluster)
     row = conn.execute(
         "SELECT * FROM clusters WHERE instance_id = ? AND status = 'active'"
+        " AND access_domain = ?"
         " AND (member_fingerprint = ? OR snapshot_fingerprint = ?)"
         " ORDER BY version DESC LIMIT 1",
-        (instance_id, memfp, snap),
+        (instance_id, dom, memfp, snap),
     ).fetchone()
     if row is None:
         best, best_sim = None, 0.0
         for cand in conn.execute(
-            "SELECT * FROM clusters WHERE instance_id = ? AND status = 'active'", (instance_id,)
+            "SELECT * FROM clusters WHERE instance_id = ? AND status = 'active'"
+            " AND access_domain = ?", (instance_id, dom)
         ):
             sim = jaccard(set(loads(cand["features"]) or []), cluster.features)
             if sim > best_sim:
@@ -393,12 +410,13 @@ def _upsert_cluster(conn, instance_id: str, cluster: Cluster) -> tuple[str, str,
         conn.execute(
             "UPDATE clusters SET snapshot_fingerprint = ?, member_fingerprint = ?, version = ?,"
             " members = ?, support_count = ?, independent_source_count = ?,"
-            " subject_distribution = ?, time_distribution = ?, features = ?, updated_at = ?"
-            " WHERE cluster_id = ?",
+            " subject_distribution = ?, time_distribution = ?, features = ?,"
+            " access_domain = ?, updated_at = ? WHERE cluster_id = ?",
             (snap, memfp, version, dumps([m["memory_id"] for m in cluster.members]),
              stats["support_count"], stats["independent_source_count"],
              dumps(stats["subject_distribution"]), dumps(stats["time_distribution"]),
-             dumps(sorted(cluster.features)), ts, row["cluster_id"]),
+             dumps(sorted(cluster.features)), domain_key(cluster), ts,
+             row["cluster_id"]),
         )
         return row["cluster_id"], snap, version, int(row["support_count"] or 0)
 
@@ -406,13 +424,13 @@ def _upsert_cluster(conn, instance_id: str, cluster: Cluster) -> tuple[str, str,
     conn.execute(
         "INSERT INTO clusters (cluster_id, instance_id, algorithm_version, snapshot_fingerprint,"
         " member_fingerprint, version, members, support_count, independent_source_count,"
-        " subject_distribution, time_distribution, features, created_at, updated_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " subject_distribution, time_distribution, features, access_domain,"
+        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cluster_id, instance_id, ALGORITHM_VERSION, snap, memfp, 1,
          dumps([m["memory_id"] for m in cluster.members]),
          stats["support_count"], stats["independent_source_count"],
          dumps(stats["subject_distribution"]), dumps(stats["time_distribution"]),
-         dumps(sorted(cluster.features)), ts, ts),
+         dumps(sorted(cluster.features)), domain_key(cluster), ts, ts),
     )
     return cluster_id, snap, 1, 0
 

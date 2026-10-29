@@ -2,7 +2,7 @@
 
 > 对象：审计意见 14 条（含 3 条"严重"、5 条"高"、4 条"中"）。
 > 结论：**14 条全部处理，其中 11 条已修并有测试，3 条做了约束性降级与文档化**。
-> 验证：python -m unittest discover -s tests → **56 条全过**；python tests/stress_m1.py → 8 项不变量全绿。
+> 验证：python -m unittest discover -s tests → **64 条全过**；python tests/stress_m1.py → 8 项不变量全绿。
 > **状态截至 commit f0730cf 之后的一次补修（2026-10-29 深夜）**；本文件会随代码变，之后以 git log 与测试数为准，别只看这里的数字。
 
 ## 一、逐条处置
@@ -40,7 +40,7 @@
 ## 四、验证记录（可复跑）
 
 ```
-python -m unittest discover -s tests        # 56 passed
+python -m unittest discover -s tests        # 56 passed（安全审计后再加 8 条，见 docs/SECURITY-FIXES.md）
 python tests/stress_m1.py                   # 240 事件 / 60 故意失败 / 全部恢复 / 90 次领取零重复 / 8 项不变量 true / 测试库自动清除
 ```
 

@@ -139,7 +139,23 @@ class Handler(BaseHTTPRequestHandler):
     allow_remote: bool = False
 
     # ---- 访问控制：默认只认回环；开了远程就必须带令牌
+    ALLOWED_ORIGINS = ("http://127.0.0.1", "http://localhost", "https://127.0.0.1",
+                       "https://localhost")
+
+    def _origin_ok(self) -> bool:
+        """挡住跨站请求与 DNS 重绑定：Origin 必须是本机，Host 必须是回环名。"""
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin and not any(origin == o or origin.startswith(o + ":")
+                              for o in self.ALLOWED_ORIGINS):
+            return False
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        if host and host not in ("127.0.0.1", "localhost", "[::1]", "::1"):
+            return False
+        return True
+
     def _authorized(self) -> bool:
+        if not self._origin_ok():
+            return False
         if self.token:
             got = self.headers.get("X-Auth-Token") or ""
             return got == self.token
@@ -224,6 +240,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
             return
         try:
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"status": "rejected",
+                            "problems": ["Content-Type 必须是 application/json"]}, 415)
+                return
             length = int(self.headers.get("Content-Length") or 0)
             if length > MAX_BODY_BYTES:
                 self._json({"status": "rejected", "problems": ["请求体过大"]}, 413)
@@ -280,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db", default=os.environ.get("NEWBORN_DB") or str(DEFAULT_DB))
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--token", default=os.environ.get("NEWBORN_WEB_TOKEN") or None,
+                   help="管理令牌；非回环地址时必须提供")
     a = p.parse_args(argv)
     serve(a.db, a.host, a.port, a.token)
     return 0

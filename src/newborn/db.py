@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS clusters (
     subject_distribution TEXT NOT NULL DEFAULT '{}',
     time_distribution    TEXT NOT NULL DEFAULT '{}',
     features        TEXT NOT NULL DEFAULT '{}',
+    access_domain   TEXT NOT NULL DEFAULT '["instance"]',
     status          TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active','split','merged','archived')),
     created_at      REAL NOT NULL,
@@ -207,6 +208,7 @@ _COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "events": {"claimed_by": "TEXT", "lease_until": "REAL"},
     "consolidation_jobs": {"job_key": "TEXT"},
     "trait_proposals": {"evidence_fingerprint": "TEXT"},
+    "clusters": {"access_domain": "TEXT NOT NULL DEFAULT '[\"instance\"]'"},
 }
 
 
