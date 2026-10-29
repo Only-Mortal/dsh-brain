@@ -20,7 +20,7 @@ const PY = process.env.NEWBORN_PYTHON || "python";
 const BRIDGE = join(import.meta.dirname, "session_bridge.py");
 const DB = process.env.NEWBORN_DB || join(import.meta.dirname, "..", "memory", "live.sqlite3");
 
-const MAX_PER_RUN = 80;
+const MAX_PER_RUN = 5000;  // 一次灌完；水位只在全量处理后前移
 const MIN_LEN = 4;
 
 // 这些是宿主每轮注入的上下文，不是他说的话，不能进记忆
@@ -97,10 +97,38 @@ function textOf(data) {
 
 /** 去掉 QQ 桥包的外壳，留下真正的原话和昵称 */
 function unwrap(text) {
-  const m = text.match(/^<user_message[^>]*nickname="([^"]*)"[^>]*>([\s\S]*)<\/user_message>$/);
-  if (m) return { who: m[1], text: m[2].trim() };
-  return { who: null, text };
+  let body = String(text).trim();
+  // 先剥掉一层层方括号标签：[受限用户:仅问答] [@我] 这类
+  for (let i = 0; i < 5; i++) {
+    const nxt = body.replace(/^\[[^\]]{1,30}\]\s*/, "");
+    if (nxt === body) break;
+    body = nxt;
+  }
+  let qq = null;
+  let nick = null;
+  // 群聊前缀：[HH:MM 昵称(qq)]
+  const pfx = body.match(/^\[[0-9]{1,2}:[0-9]{2} ([^\]]*)\(([0-9]+)\)\]\s*/);
+  if (pfx) {
+    nick = pfx[1];
+    qq = pfx[2];
+    body = body.slice(pfx[0].length);
+  }
+  // <user_message qq=".." nickname="..">原始话</user_message>
+  const env = body.match(/<user_message[^>]*>/);
+  if (env) {
+    const tag = env[0];
+    const q = tag.match(/qq="([0-9]+)"/);
+    const n = tag.match(/nickname="([^"]*)"/);
+    if (q) qq = q[1];
+    if (n) nick = n[1];
+    body = body.slice(env.index + tag.length);
+  }
+  body = body.replace(/<\/user_message>\s*$/, "").trim();
+  return { who: nick, qq, text: body };
 }
+
+// 这些号的消息一律不处理（机器人，2026-10-30 他点名）
+const IGNORE_QQ = new Set(["1847019362"]);
 
 function collect(lines, state) {
   const fresh = [];
@@ -120,16 +148,19 @@ function collect(lines, state) {
     let body = textOf(data);
     if (!body) continue;
     let who = null;
+    let qq = null;
     if (role === "user") {
       const u = unwrap(body);
       body = u.text;
       who = u.who;
+      qq = u.qq;
+      if (qq && IGNORE_QQ.has(qq)) continue;   // 机器人消息：不进库、不动作
     }
     if (!body || body.length < MIN_LEN) continue;
     if (SKIP_PREFIXES.some((p) => body.startsWith(p))) continue;
     const key = data.id || rec.id || `${rec.time}:${body.slice(0, 24)}`;
     if (state.seen.includes(key)) continue;
-    fresh.push({ role, text: body, key, who });
+    fresh.push({ role, text: body, key, who, qq });
   }
   return fresh;
 }
@@ -156,7 +187,7 @@ function ingestFile(path, state, dry) {
       const args = [
         BRIDGE, "--db", DB,
         "--conversation", scope.conversation,
-        "--actor", m.role === "user" ? "owner" : "self",
+        "--actor", m.qq || (m.role === "user" ? "owner" : "self"),
         "--privacy", scope.privacy,
         "remember", text,
       ];
