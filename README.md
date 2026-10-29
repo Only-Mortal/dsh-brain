@@ -1,20 +1,53 @@
-# newborn · NeuroMind v1.0 认知架构
+# newborn · NeuroMind v1.1 认知架构
 
 从零构建一个具有连续经历、长期人格、模拟情绪、关系记忆与有限主动性的认知系统。`newborn` 是工程项目名，NeuroMind 是本项目采用的认知架构名。
 
-> 项目阶段：M1 闭环 + 巩固（皮层第一版）已实现并部分验收；仍在测试后端阶段，未接真实渠道。  
-> 架构版本：v1.0 设计稿；不等同于软件发布版本或能力完成状态。  
-> 创建日期：2026-10-28 · 文档整理日期：2026-10-28
+> **当前版本：v1.1.0**（2026-10-30）· 测试 102 条全过 · 仍在测试后端阶段，未接真实渠道  
+> 架构设计：v1.0 设计稿（下文保留原文）· 变更见 [CHANGELOG](CHANGELOG.md)
+>
+> 这一版的重心从"能跑通"转到"能维护"：加了维护调度、物理清理、崩溃点验收，并把 Trait 从数据覆盖度改为只认反馈证据。
 
-## 当前工程状态（2026-10-28 更新）
+## 快速开始
+
+```powershell
+$env:PYTHONPATH = "src"
+python -m newborn.cli init                     # 建库
+python -m newborn.cli ingest "今天有点累" --privacy conversation --conversation c1
+python -m newborn.cli run                      # 处理待处理事件（含恢复）
+python -m newborn.cli status                   # 看统计与情绪
+python -m newborn.cli consolidate --hours 24   # 巩固（皮层）
+python -m newborn.cli worker --once            # 维护循环跑一轮
+python -m newborn.cli webui                    # 监控台 http://127.0.0.1:8765
+python -m unittest discover -s tests           # 全量测试
+```
+
+## 能力矩阵（v1.1）
+
+| 能力 | 状态 | 入口 |
+| --- | --- | --- |
+| 事件两阶段落盘 + 幂等 + 恢复 | 已实现 | `kernel.py` / `cli run` |
+| 事件与 Outbox 租约领取 | 已实现 | `kernel.claim_events` / `cli claim` |
+| 自传式记忆 + 访问域 + 隐私继承 | 已实现 | `memory.py` / `recall` |
+| 巩固皮层（抽样/聚类/语义版本/Trait 限幅） | 已实现 | `consolidate.py` / `cli consolidate` |
+| 情绪模型（ΔE 按遗忘曲线衰减） | 已实现 | `affect.py` |
+| 备份与隔离恢复 | 已实现 | `backup.py` / `cli backup|restore` |
+| 删除 + 撤销账本 + 派生一致性 | 已实现（逻辑撤权） | `retention.py` / `cli delete|replay-ledger` |
+| 物理清理 | 已实现（仅数据库文件） | `cli purge --confirm` |
+| 维护调度 | 已实现（轻循环） | `scheduler.py` / `cli worker` |
+| 任务视图（只读） | 已实现 | `GET /api/jobs` / `cli jobs` |
+| 反馈驱动 Trait | 已实现（第一版） | `feedback.py` / `cli feedback` |
+| 质量验收集 | 已实现（固定样例） | `tests/test_quality.py` |
+| 向量检索 / 关系图 / 自我叙事 / 目标授权层 / 真实渠道 | 未实现 | — |
+
+## 当前工程状态（2026-10-30 更新，v1.1.0）
 
 状态分三种：**已实现 / 部分验收 / 尚未实现**。当前进度：
 
 | 状态 | 内容 |
 | --- | --- |
-| 已实现 | 语言选定 Python；存储选定 SQLite（WAL）；M1 最小闭环代码落地：`db.py`（表结构与事务）、`events.py`（事件封装与校验）、`affect.py`（模拟情绪，ΔE 按遗忘曲线衰减）、`memory.py`（自传式记忆 + 访问上下文）、`state.py`（五层状态，层名白名单）、`kernel.py`（两阶段处理 + Outbox 领取）、`cli.py`（init/ingest/run/status/recall/claim/**consolidate**）、`inference.py`（InferenceAPI：Ollama 后端 + 规则后端，**均标记测试用**）、`reasoner.py`（提示词组装与降级）、`webui.py`（标准库监控台：`/`、`/api/state`、`/api/ingest`）、`consolidate.py`（巩固：分层抽样 → 指纹聚类 → 统计结构 → 模板/模型命题 → Trait 提案 → 限幅 → 版本提交） |
-| 部分验收 | 单测 36 条全过（`python -m unittest discover -s tests -v`），覆盖：重复投递无副作用、会话与主体隐私隔离、推理失败后事件仍可重试、Outbox 单次领取与租约接管、非法状态转换拒绝、跨实例幂等、写入不变量、短文本与重复内容不进长期记忆、情绪回落与限幅；巩固侧另有 10 条：分层抽样上限/覆盖率/占比/同 seed 可复现、任务幂等、support 与独立来源分离、跨窗口加强、Trait 单次与当日绝对累计限幅（防正负抵消）、identity 只读、规则后端可独立跑通。**尚未**接入真实推理以外的模型评测，也**未**做多进程崩溃点注入 |
-| 尚未实现 | 向量检索与关系图、巩固后的自我叙事与反思、目标/授权/策略层（M3）、备份恢复与删除流程、真实渠道适配器、Trait 的长期行为验证 |
+| 已实现 | `db.py` / `events.py` / `affect.py` / `memory.py` / `state.py` / `kernel.py` / `inference.py` / `reasoner.py` / `consolidate.py` / `scheduler.py` / `feedback.py` / `backup.py` / `retention.py` / `webui.py` / `cli.py`；命令：`init/ingest/run/status/recall/claim/consolidate/worker/delete/purge/feedback/jobs/backup/verify-backup/restore/replay-ledger/webui` |
+| 部分验收 | 单测 **102 条全过**（`python -m unittest discover -s tests -v`）。覆盖：幂等与恢复、访问域与隐私继承、精确主体匹配、巩固抽样/聚类/版本链/限幅、备份一致性与篡改拒绝、删除与账本重放、调度预算、崩溃点恢复、反馈驱动 Trait、质量验收集。压测：240 事件 / 60 故意失败 / 全部恢复 / 90 次领取零重复。**尚未**做多实例协调、真实渠道接入、模型侧评测 |
+| 尚未实现 | 向量检索与关系图、巩固后的自我叙事与反思、目标/授权/策略层（M3）、真实渠道适配器、Trait 的长期行为模型 |
 
 ## 保留的项目约定
 

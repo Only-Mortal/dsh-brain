@@ -201,3 +201,28 @@ def replay_ledger(conn, ledger: str | Path) -> dict[str, Any]:
             bump_privacy_epoch(conn, rec["instance_id"])
         replayed += 1
     return {"replayed": replayed, "ledger": str(path)}
+
+
+def purge(conn, db_path: str | Path, *, confirm: bool = False) -> dict[str, Any]:
+    """物理清理：真的把 deleted 记忆和 rejected 事件的正文删掉，然后 VACUUM。
+
+    边界要说清楚：这只处理**本文件**。WAL 残留、SSD 磨损层、宿主快照、
+    云端副本都不在承诺范围内——那些要由介质层解决，不能靠一句 VACUUM。
+    """
+    if not confirm:
+        counts = {
+            "memories": conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE lifecycle_state='deleted'").fetchone()[0],
+            "events": conn.execute(
+                "SELECT COUNT(*) FROM events WHERE process_state='rejected'").fetchone()[0],
+        }
+        return {"status": "preview", "would_delete": counts, "confirm_required": True}
+    with Tx(conn):
+        # 让 SQLite 在释放页时把内容清零，否则删掉的行仍可能留在空闲页里
+        conn.execute("PRAGMA secure_delete = ON")
+        mem = conn.execute("DELETE FROM memories WHERE lifecycle_state='deleted'").rowcount
+        ev = conn.execute("DELETE FROM events WHERE process_state='rejected'").rowcount
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.execute("VACUUM")
+    return {"status": "purged", "memories": mem, "events": ev,
+            "note": "仅清理数据库文件；WAL 之外的介质副本不在承诺范围内"}

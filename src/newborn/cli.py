@@ -98,6 +98,23 @@ def cmd_claim(args) -> int:
     return 0
 
 
+def cmd_worker(args) -> int:
+    from . import scheduler
+    res = scheduler.serve_forever(_db_path(args.db), args.instance,
+                                  interval=args.interval, window_hours=args.hours,
+                                  once=args.once)
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_purge(args) -> int:
+    from . import retention
+    conn = db.connect(_db_path(args.db))
+    res = retention.purge(conn, _db_path(args.db), confirm=args.confirm)
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_delete(args) -> int:
     from . import retention
     conn = db.connect(_db_path(args.db))
@@ -230,6 +247,16 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--lease", type=float, default=60.0)
     s.set_defaults(func=cmd_claim)
+
+    s = sub.add_parser("worker", help="维护循环：该巩固了就巩一轮")
+    s.add_argument("--once", action="store_true", help="只跑一轮")
+    s.add_argument("--interval", type=float, default=600.0)
+    s.add_argument("--hours", type=float, default=24.0)
+    s.set_defaults(func=cmd_worker)
+
+    s = sub.add_parser("purge", help="物理清理已删除的正文（需 --confirm）")
+    s.add_argument("--confirm", action="store_true")
+    s.set_defaults(func=cmd_purge)
 
     s = sub.add_parser("delete", help="删除对象/会话/实例（默认只预览）")
     s.add_argument("--scope", choices=["object", "conversation", "instance"], default="object")

@@ -8,4 +8,4 @@
 - 外部输入必须先变成 EventEnvelope；记忆读写必须带 AccessContext。
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"
