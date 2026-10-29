@@ -669,6 +669,9 @@ def consolidate(conn, instance_id: str = "default", *, window_hours: float = 24.
         for i, item in enumerate(prepared):
             for j in range(i + 1, len(prepared)):
                 a, b = item["cluster"], prepared[j]["cluster"]
+                # 审计 finding 4 的残留：跨访问域不许互相改写可信状态
+                if a.domain != b.domain:
+                    continue
                 if jaccard(a.topic_features, b.topic_features) < CONFLICT_TOPIC_THRESHOLD:
                     continue
                 pa = polarity(a.members[0]["content"])

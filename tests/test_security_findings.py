@@ -148,5 +148,28 @@ class Finding2WebOriginTest(unittest.TestCase):
         self.assertIn("--token", src)
 
 
+class Finding4CrossDomainDisputeTest(unittest.TestCase):
+    """跨访问域不许互相改写可信状态（finding 4 的残留：主流程矛盾循环）。"""
+
+    def setUp(self) -> None:
+        self.conn = db.connect(":memory:")
+
+    def test_private_domains_do_not_dispute_each_other(self) -> None:
+        for i in range(3):
+            epi(self.conn, f"我喜欢开会 第{i}次", actor="alice", privacy="private",
+                ts=NOW - i * 60)
+            epi(self.conn, f"我不喜欢开会 第{i}次", actor="bob", privacy="private",
+                ts=NOW - i * 60 - 20)
+        res = consolidate.consolidate(self.conn, "default", window_hours=2, seed=4,
+                                      min_days=1)
+        self.assertEqual(res["status"], "done")
+        rows = self.conn.execute(
+            "SELECT subject_ids, epistemic_status FROM memories WHERE memory_type='semantic'"
+        ).fetchall()
+        for row in rows:
+            self.assertNotEqual(row["epistemic_status"], "disputed",
+                                "不同主体的私有语义不能互相判 disputed：%s" % row["subject_ids"])
+
+
 if __name__ == "__main__":
     unittest.main()
