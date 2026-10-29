@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from . import feedback as feedback_mod
+from . import retention
 from .db import NestedTx, Tx, dumps, loads
 from .inference import Inference, RuleBackend
 
@@ -596,6 +598,7 @@ def consolidate(conn, instance_id: str = "default", *, window_hours: float = 24.
     if gate:
         return {"status": "sampling_rejected", "problems": gate, "sampled": sample.to_dict()}
 
+    epoch_at_start = retention.privacy_epoch(conn, instance_id)
     sfp = sample_fingerprint(sample.rows, per_day, per_conv)
     job_key = hashlib.blake2b(
         f"{instance_id}|{start}|{now}|{seed}|{ALGORITHM_VERSION}|{sample.watermark}|"
@@ -621,6 +624,10 @@ def consolidate(conn, instance_id: str = "default", *, window_hours: float = 24.
     ts = time.time()
     produced: list[dict[str, Any]] = []
     traits: list[dict[str, Any]] = []
+
+    if retention.privacy_epoch(conn, instance_id) != epoch_at_start:
+        return {"status": "privacy_epoch_changed", "sampled": sample.to_dict(),
+                "reason": "抽样期间发生了删除/撤权，整轮放弃，重新抽样"}
 
     with Tx(conn):
         cluster_stats: list[dict[str, Any]] = []
@@ -686,13 +693,16 @@ def consolidate(conn, instance_id: str = "default", *, window_hours: float = 24.
                     (dumps([m["memory_id"] for m in weaker.members]), target["memory_id"]),
                 )
 
-        for dim, delta in propose_trait_deltas(cluster_stats).items():
-            fp = evidence_fingerprint(produced[0]["cluster_id"] if produced else "none",
-                                      sfp, RULE_VERSION)
-            traits.append(apply_trait_proposal(
-                conn, instance_id, dim, delta,
-                cluster_id=produced[0]["cluster_id"] if produced else None,
-                evidence=[p["cluster_id"] for p in produced][:5], evidence_fp=fp))
+        # 阶段 E：Trait 只接受反馈证据；覆盖度统计留在 job 里当指标，不写状态
+        coverage = propose_trait_deltas(cluster_stats)
+        fb_fp = feedback_mod.evidence_fingerprint(conn, instance_id)
+        if fb_fp:
+            for dim, delta in feedback_mod.trait_deltas_from_feedback(conn, instance_id).items():
+                traits.append(apply_trait_proposal(
+                    conn, instance_id, dim, delta, cluster_id=None,
+                    evidence=[f"feedback:{fb_fp}"], evidence_fp=f"{fb_fp}:{dim}"))
+        else:
+            traits.append({"skipped": "no_feedback_evidence", "coverage": coverage})
 
         conn.execute(
             "INSERT INTO consolidation_jobs (job_id, job_key, instance_id, window_start,"

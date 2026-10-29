@@ -213,7 +213,10 @@ class V5EvidenceIdentityTest(unittest.TestCase):
                      "active", "conversation"))
 
     def test_different_seed_does_not_relearn_same_evidence(self) -> None:
+        from newborn import feedback as fb
         self._seed()
+        fb.add_feedback(self.conn, "default", "confirm")
+        fb.add_feedback(self.conn, "default", "confirm")
         r1 = consolidate.consolidate(self.conn, "default", window_hours=72, seed=1, min_days=1)
         self.assertEqual(r1["status"], "done")
         applied1 = [t for t in r1["traits"] if t.get("applied")]

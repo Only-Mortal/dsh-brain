@@ -165,8 +165,9 @@ class ConsolidationTest(unittest.TestCase):
         for item in res["items"]:
             self.assertEqual(item["display_source"], "template")
             self.assertTrue(item["display_text"])
-        trait_rows = self.conn.execute("SELECT COUNT(*) FROM trait_proposals").fetchone()[0]
-        self.assertGreater(trait_rows, 0, "无模型也要产 trait 提案")
+        # 阶段 E 起 Trait 只接受反馈证据；没有反馈时巩固必须明确"跳过"，而不是拿覆盖度冒充性格
+        self.assertTrue(any(t.get("skipped") == "no_feedback_evidence"
+                            for t in res["traits"]), res["traits"])
 
 
 if __name__ == "__main__":

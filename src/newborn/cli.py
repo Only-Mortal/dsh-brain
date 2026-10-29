@@ -98,6 +98,58 @@ def cmd_claim(args) -> int:
     return 0
 
 
+def cmd_delete(args) -> int:
+    from . import retention
+    conn = db.connect(_db_path(args.db))
+    target = args.target
+    if args.scope == "conversation" and "|" not in target:
+        target = f"{args.instance}|{target}"
+    if args.preview or not args.confirm:
+        preview = retention.preview_deletion(conn, args.instance, args.scope, target)
+        print(json.dumps({"preview": preview, "confirm_required": not args.confirm},
+                         ensure_ascii=False, indent=2))
+        return 0
+    res = retention.request_deletion(conn, _db_path(args.db), args.instance, args.scope, target)
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_feedback(args) -> int:
+    from . import feedback
+    conn = db.connect(_db_path(args.db))
+    res = feedback.add_feedback(conn, args.instance, args.kind, memory_id=args.memory_id,
+                                note=args.note or "")
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_replay_ledger(args) -> int:
+    from . import retention
+    conn = db.connect(_db_path(args.db))
+    res = retention.replay_ledger(conn, args.ledger or retention.ledger_path(_db_path(args.db)))
+    print(json.dumps(res, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_jobs(args) -> int:
+    conn = db.connect(_db_path(args.db))
+    jobs = conn.execute(
+        "SELECT job_id, instance_id, window_start, window_end, seed, algorithm_version,"
+        " input_watermark, status, created_at, produced FROM consolidation_jobs"
+        " WHERE instance_id = ? ORDER BY created_at DESC LIMIT ?",
+        (args.instance, args.limit)).fetchall()
+    out = []
+    for j in jobs:
+        produced = loads(j["produced"]) if j["produced"] else {}
+        out.append({"job_id": j["job_id"], "window_hours": round((j["window_end"] - j["window_start"]) / 3600, 2),
+                    "seed": j["seed"], "algorithm_version": j["algorithm_version"],
+                    "input_watermark": j["input_watermark"], "status": j["status"],
+                    "clusters": produced.get("clusters"),
+                    "traits": produced.get("traits")})
+    print(json.dumps({"count": len(out), "jobs": out}, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_backup(args) -> int:
     from . import backup
     manifest = backup.create_backup(_db_path(args.db), args.dest,
@@ -178,6 +230,30 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int, default=10)
     s.add_argument("--lease", type=float, default=60.0)
     s.set_defaults(func=cmd_claim)
+
+    s = sub.add_parser("delete", help="删除对象/会话/实例（默认只预览）")
+    s.add_argument("--scope", choices=["object", "conversation", "instance"], default="object")
+    s.add_argument("--target", required=True)
+    s.add_argument("--instance", default="default")
+    s.add_argument("--preview", action="store_true")
+    s.add_argument("--confirm", action="store_true")
+    s.set_defaults(func=cmd_delete)
+
+    s = sub.add_parser("feedback", help="记录一条显式反馈")
+    s.add_argument("kind", choices=["correct", "reject", "confirm"])
+    s.add_argument("--memory-id", default=None)
+    s.add_argument("--note", default="")
+    s.add_argument("--instance", default="default")
+    s.set_defaults(func=cmd_feedback)
+
+    s = sub.add_parser("replay-ledger", help="恢复后重放删除撤销账本")
+    s.add_argument("--ledger", default=None)
+    s.set_defaults(func=cmd_replay_ledger)
+
+    s = sub.add_parser("jobs", help="查看巩固任务（只读）")
+    s.add_argument("--instance", default="default")
+    s.add_argument("--limit", type=int, default=20)
+    s.set_defaults(func=cmd_jobs)
 
     s = sub.add_parser("backup", help="做一份一致性备份")
     s.add_argument("--dest", required=True, help="备份目录（必须为空或不存在）")

@@ -176,6 +176,36 @@ CREATE TABLE IF NOT EXISTS trait_proposals (
     created_at      REAL NOT NULL
 );
 
+-- ===== 阶段 B/C/E：删除、任务视图、反馈 =====
+
+CREATE TABLE IF NOT EXISTS instance_meta (
+    instance_id TEXT PRIMARY KEY,
+    privacy_epoch INTEGER NOT NULL DEFAULT 0,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deletion_requests (
+    request_id  TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL,
+    scope       TEXT NOT NULL CHECK (scope IN ('object','conversation','instance')),
+    target      TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'requested'
+        CHECK (status IN ('requested','revoked','cleaning','cleaned','failed')),
+    preview     TEXT NOT NULL DEFAULT '{}',
+    detail      TEXT NOT NULL DEFAULT '{}',
+    created_at  REAL NOT NULL,
+    updated_at  REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS feedback (
+    feedback_id TEXT PRIMARY KEY,
+    instance_id TEXT NOT NULL,
+    memory_id   TEXT,
+    kind        TEXT NOT NULL CHECK (kind IN ('correct','reject','confirm')),
+    note        TEXT NOT NULL DEFAULT '',
+    created_at  REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trait_ledger (
     instance_id TEXT NOT NULL,
     day         TEXT NOT NULL,

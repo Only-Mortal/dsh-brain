@@ -180,6 +180,35 @@ class Handler(BaseHTTPRequestHandler):
     def _conn(self) -> sqlite3.Connection:
         return db.connect(self.db_path)
 
+    def _jobs(self, instance: str = "default") -> dict:
+        """只读任务视图：不含私有正文，只给标识、预算、分布和结果计数。"""
+        conn = self._conn()
+        try:
+            jobs = conn.execute(
+                "SELECT job_id, window_start, window_end, seed, algorithm_version,"
+                " input_watermark, status, sampled, produced, created_at"
+                " FROM consolidation_jobs WHERE instance_id = ?"
+                " ORDER BY created_at DESC LIMIT 20", (instance,)).fetchall()
+            deletions = conn.execute(
+                "SELECT request_id, scope, status, created_at FROM deletion_requests"
+                " WHERE instance_id = ? ORDER BY created_at DESC LIMIT 20", (instance,)).fetchall()
+            return {
+                "instance": instance,
+                "jobs": [{
+                    "job_id": j["job_id"],
+                    "window_hours": round((j["window_end"] - j["window_start"]) / 3600, 2),
+                    "seed": j["seed"],
+                    "algorithm_version": j["algorithm_version"],
+                    "input_watermark": j["input_watermark"],
+                    "status": j["status"],
+                    "sampled": json.loads(j["sampled"] or "{}"),
+                    "produced": json.loads(j["produced"] or "{}"),
+                } for j in jobs],
+                "deletions": [dict(d) for d in deletions],
+            }
+        finally:
+            conn.close()
+
     def _state(self, instance: str = "default") -> dict:
         conn = self._conn()
         try:
@@ -226,6 +255,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/health":
             self._json({"ok": True, "ts": time.time()})
+        elif path == "/api/jobs":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            inst = (qs.get("instance") or ["default"])[0]
+            self._json(self._jobs(inst))
         elif path == "/api/state":
             self._json(self._state())
         else:
