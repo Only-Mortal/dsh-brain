@@ -8,7 +8,7 @@
 //   node tools/dsh_ingest.mjs --loop 300
 //   node tools/dsh_ingest.mjs --once --dry
 
-import { readdirSync, readFileSync, statSync, writeFileSync, existsSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync, existsSync, watch } from "node:fs";
 import { join, basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { zstdDecompressSync } from "node:zlib";
@@ -189,7 +189,24 @@ function runOnce(dry) {
 
 const args = process.argv.slice(2);
 const dry = args.includes("--dry");
-if (args.includes("--loop")) {
+if (args.includes("--watch")) {
+  // 事件驱动：会话日志一写就收，2 秒去抖（避免一轮里写十几次）
+  runOnce(dry);
+  let timer = null;
+  const kick = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      try { runOnce(dry); } catch (e) { console.error(String(e).slice(0, 200)); }
+    }, 2000);
+  };
+  watch(ROOT, { recursive: true }, (_evt, file) => {
+    if (!file || !String(file).includes("session.v4.jsonl")) return;
+    kick();
+  });
+  console.log(JSON.stringify({ mode: "watch", root: ROOT }));
+  setInterval(() => runOnce(dry), 15 * 60 * 1000); // 兜底：15 分钟一次，防漏事件
+} else if (args.includes("--loop")) {
   const every = Number(args[args.indexOf("--loop") + 1] || 300) * 1000;
   runOnce(dry);
   setInterval(() => runOnce(dry), every);
